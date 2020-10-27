@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import torch.utils.model_zoo as model_zoo
 from torch.nn import init
 import os
+from collections import OrderedDict
 
 __all__ = ['xception']
 
@@ -140,6 +141,7 @@ class Xception(nn.Module):
         self.bn4 = nn.BatchNorm2d(2048)
 
         self.fc = nn.Linear(2048, num_classes)
+        self.sig = nn.Sigmoid()
 
     def features(self, input):
         x = self.conv1(input)
@@ -182,6 +184,7 @@ class Xception(nn.Module):
     def forward(self, input):
         x = self.features(input)
         x = self.logits(x)
+        x = self.sig(x)
         return x
 
 
@@ -211,11 +214,19 @@ def xception_noTop(num_classes=1000, pretrained='imagenet'):
     if pretrained=='imagenet':
         settings = pretrained_settings['xception'][pretrained]
         model.load_state_dict(model_zoo.load_url(settings['url']))
+        del model.fc
     else:
+        new_state_dict = OrderedDict()  
+        model.last_linear = torch.nn.Linear(model.fc.in_features, 1)
+        del model.fc
         checkpoint = torch.load(os.path.join(pretrained, "best.pt"))
-        model.load_state_dict(checkpoint['state_dict'])
+        for k, v in checkpoint['state_dict'].items():
+            name = k[7:] # remove 'module.' because of dataparallel
+            new_state_dict[name] = v 
+        model.load_state_dict(new_state_dict)
+        
     model.last_linear = torch.nn.Identity()
-    del model.fc
+    
     
     return model
 
@@ -238,6 +249,32 @@ class xception_lstm(nn.Module):
         r_in = c_out.view(batch_size, timesteps, -1)
         r_out, state = self.rnn(r_in,prev_state)
         r_out = self.fc(r_out)
+        r_out = torch.mean(r_out, dim = 1)
+        r_out = self.sig(r_out)
+        return r_out, state
+    
+    def zero_state(self, batch_size):
+        return (torch.zeros(self.lstm_layer, batch_size, self.lstm_size),
+                torch.zeros(self.lstm_layer, batch_size, self.lstm_size))
+
+
+# https://engineering.purdue.edu/~dgueraco/content/deepfake.pdf
+class dp_lstm(nn.Module):
+    def __init__(self, lstm_size, lstm_layer):
+        super(dp_lstm, self).__init__()
+        self.lstm_layer = lstm_layer
+        self.lstm_size = lstm_size
+        self.rnn = nn.LSTM(2048, lstm_size, lstm_layer, batch_first=True)
+        self.drop = nn.Dropout(p = 0.5)
+        self.fc = nn.Linear(lstm_size, 1)
+        self.sig = nn.Sigmoid()
+
+    def forward(self, x, prev_state):
+        # batch_size, timesteps, C, H, W = x.size()
+        r_out, state = self.rnn(x,prev_state)
+        r_out = self.drop(r_out)
+        r_out = self.fc(r_out)
+        r_out = self.drop(r_out)
         r_out = torch.mean(r_out, dim = 1)
         r_out = self.sig(r_out)
         return r_out, state

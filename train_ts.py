@@ -12,7 +12,7 @@ import time
 from dataloader.deepfakes_ts import deepfake_ts
 import sklearn.metrics
 # from model.meso import MesoInception4
-from model.xception import xception,xception_lstm
+from model.xception import xception_lstm, dp_lstm
 
 
 def run_epoch(model, dataloader, phase, optim, device, save_all=False, batch_size=8):
@@ -44,8 +44,7 @@ def run_epoch(model, dataloader, phase, optim, device, save_all=False, batch_siz
 
                 outputs, (h_t, c_t) = model(X, (h_t, c_t))
                 
-                if save_all:
-                    yhat.append(outputs.view(-1).to("cpu").detach().numpy())
+                yhat.append(outputs.view(-1).to("cpu").detach().numpy())
 
                 loss = criterion(outputs, Y)
                 # no need backprop
@@ -70,8 +69,7 @@ def run_epoch(model, dataloader, phase, optim, device, save_all=False, batch_siz
                 pbar.set_postfix_str("{:.2f}, {:.2f}, {:.2f}".format(epoch_loss, epoch_accuracy, loss.item()))
                 pbar.update()
 
-    if not save_all:
-        yhat = np.concatenate(yhat)
+    yhat = np.concatenate(yhat)
     y = np.concatenate(y)
 
     return epoch_loss, epoch_accuracy, yhat, y
@@ -103,13 +101,16 @@ def run(num_epochs=45,
     # if "meso" in modelname.split('_'):
     #     model = MesoInception4(num_classes = 1)
     # else:
-    model = xception_lstm(256, 2, pretrained='imagenet')
-        
+    # model = xception_lstm(256, 2, pretrained='./output/xception_random/')
+    # model = xception_lstm(256, 2, pretrained='imagenet')
+    model = dp_lstm(lstm_size= 512, lstm_layer= 1)
+    
     if device.type == "cuda":
         model = torch.nn.DataParallel(model)
     model.to(device)
 
-    optim = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=1e-4)
+    optim = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    # optim = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=1e-4)
     if lr_step_period is None:
         lr_step_period = math.inf
     scheduler = torch.optim.lr_scheduler.StepLR(optim, lr_step_period)
@@ -120,6 +121,7 @@ def run(num_epochs=45,
     kwargs = {"mean": mean,
               "std": std,
               "size":size,
+              "nframe":5,
               }
 
 # Data preparation
@@ -128,7 +130,7 @@ def run(num_epochs=45,
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=(device.type == "cuda"), drop_last=True)
     val_dataloader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=(device.type == "cuda"))
+        val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=(device.type == "cuda"), drop_last=True)
     dataloaders = {'train': train_dataloader, 'val': val_dataloader}
 
     with open(os.path.join(output, "log.csv"), "a") as f:
@@ -192,17 +194,16 @@ def run(num_epochs=45,
             for split in ["test"]:
                 dataloader = torch.utils.data.DataLoader(
                     deepfake_ts(split=split, **kwargs),
-                    batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=(device.type == "cuda"))
+                    batch_size=batch_size, num_workers=num_workers, shuffle=True, pin_memory=(device.type == "cuda"), drop_last=True)
                 loss, accuracy, yhat, y = run_epoch(model, dataloader, split, None, device, batch_size = batch_size)
                 f.write("{} loss: {:.3f}, accuracy: {:.3f} \n".format(split, loss,accuracy))
                 f.flush()
 
-run(modelname="xception_lstm",
+run(modelname="xception_adam_lstm_adam",
         pretrained=False,
         batch_size=8,
         run_test=True,
         size = 299,
         lr_step_period=15,
         num_epochs = 50)
-
 

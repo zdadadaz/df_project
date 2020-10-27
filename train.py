@@ -15,7 +15,7 @@ from model.meso import MesoInception4
 from model.xception import xception
 
 
-def run_epoch(model, dataloader, phase, optim, device, save_all=False):
+def run_epoch(model, dataloader, phase, optim, device):
 
     criterion = torch.nn.BCELoss()  # Standard L2 loss
 
@@ -41,8 +41,7 @@ def run_epoch(model, dataloader, phase, optim, device, save_all=False):
 
                 outputs = model(X)
                 
-                if save_all:
-                    yhat.append(outputs.view(-1).to("cpu").detach().numpy())
+                yhat.append(outputs.view(-1).to("cpu").detach().numpy())
 
                 loss = criterion(outputs, Y)
                 preds = (outputs > 0.5).float()
@@ -62,8 +61,7 @@ def run_epoch(model, dataloader, phase, optim, device, save_all=False):
                 pbar.set_postfix_str("{:.2f}, {:.2f}, {:.2f}".format(epoch_loss, epoch_accuracy, loss.item()))
                 pbar.update()
 
-    if not save_all:
-        yhat = np.concatenate(yhat)
+    yhat = np.concatenate(yhat)
     y = np.concatenate(y)
 
     return epoch_loss, epoch_accuracy, yhat, y
@@ -97,13 +95,13 @@ def run(num_epochs=45,
         model = MesoInception4(num_classes = 1)
     else:
         model = xception(num_classes=1000, pretrained='imagenet')
-        # model.last_linear = torch.nn.Linear(model.fc.in_features, 1)
-        
+        # model = dp_lstm(lstm_size= 512, lstm_layer= 1)
     if device.type == "cuda":
         model = torch.nn.DataParallel(model)
     model.to(device)
 
-    optim = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=1e-4)
+    optim = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=1e-4)
+    # optim = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9, weight_decay=1e-4)
     if lr_step_period is None:
         lr_step_period = math.inf
     scheduler = torch.optim.lr_scheduler.StepLR(optim, lr_step_period)
@@ -191,20 +189,20 @@ def run(num_epochs=45,
                 f.write("{} loss: {:.3f}, accuracy: {:.3f} \n".format(split, loss,accuracy))
                 f.flush()
 
-run(modelname="meso_inception",
+run(modelname="meso_inception_adam",
         pretrained=False,
         batch_size=8,
         run_test=True,
         size = 256,
-        lr_step_period=15,
+           lr_step_period=15,
         num_epochs = 50)
 
-run(modelname="xception",
-        pretrained=False,
-        batch_size=8,
-        run_test=True,
-        size = 299,
-        lr_step_period=15,
-        num_epochs = 50)
+# run(modelname="xception_adam",
+#         pretrained=False,
+#         batch_size=8,
+#         run_test=True,
+#         size = 299,
+#         lr_step_period=15,
+#         num_epochs = 50)
 
 
